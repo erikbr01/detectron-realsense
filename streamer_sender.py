@@ -3,6 +3,7 @@ import time
 import cv2
 import numpy as np
 from realsense import RSCamera
+import zmq
 import imagezmq
 from utils import truncate
 
@@ -17,6 +18,13 @@ class VideoSender:
             connect_to=addr)
         self.hostname = socket.gethostname()
         self.jpeg_quality = 95
+
+        context = zmq.Context()
+        pose_sub = context.socket(zmq.SUB)
+        pose_pub = context.socket(zmq.PUB)
+
+        pose_pub.bind('tcp://localhost:2560')
+        pose_sub.bind('tcp://localhost:2509')
 
     def send_frames(self, color, depth):
         ret, jpg_frame = cv2.imencode(

@@ -62,10 +62,13 @@ v = VideoVisualizer(metadata)
 class_catalog = metadata.thing_classes
 
 context = zmq.Context()
-socket = context.socket(zmq.REP)
+pose_pub = context.socket(zmq.PUB)
+pose_sub = context.socket(zmq.SUB)
+
 
 if SEND_OUTPUT:
-    socket.connect('tcp://localhost:2222')
+    pose_pub.bind('tcp://localhost:2508')
+    pose_sub.connect('tcp://10.10.10.228:2509')
 
 starting_time = time.time()
 frame_counter = 0
@@ -76,7 +79,7 @@ quad_pose = None
 while True:
     try:
         if SEND_OUTPUT:
-            quad_pose_serial = socket.recv()
+            quad_pose_serial = pose_sub.recv()
             quad_pose = detection_msg_pb2.Detection()
             quad_pose.ParseFromString(quad_pose_serial)
             # print(quad_pose)
@@ -270,7 +273,7 @@ while True:
         
         if SEND_OUTPUT:
             if serial_msg is not None:
-                socket.send(serial_msg)
+                pose_pub.send(serial_msg)
             else:
                 msg = detection_msg_pb2.Detection()
                 msg.x = 0.0
@@ -279,7 +282,7 @@ while True:
                 msg.label = 'Nothing'
                 msg.confidence = 0.0
                 serial_msg = msg.SerializeToString()
-                socket.send(serial_msg)
+                pose_pub.send(serial_msg)
         
         output.write(vis_frame)
         frame_counter += 1
@@ -293,6 +296,6 @@ while True:
         cam.release()
         receiver.image_hub.close()
         cv2.destroyAllWindows()
-        socket.close()
+        pose_pub.close()
         logger.export_to_csv(utils.LOG_FILE)
 

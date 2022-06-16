@@ -196,10 +196,11 @@ while True:
                 masked_frame = cv2.bitwise_and(frame, obj_mask)
                 cv2.imwrite('masked_frame.png', masked_frame)
                 grasp_color = GraspCandidate()
-                grasp_color.set_point_cloud_from_aligned_frames(frame, depth_frame, cam_intrinsics)
+                grasp_color.pointcloud = grasp_color.set_point_cloud_from_aligned_frames(frame, depth_frame, cam_intrinsics)
                 grasp_color.save_pcd('pcd/graphics/color_pcd_full.pcd')
-                grasp.set_point_cloud_from_aligned_masked_frames(masked_frame, depth_frame, cam_intrinsics)
-            
+                pcd = grasp.gen_point_cloud_from_aligned_masked_frames(masked_frame, depth_frame, cam_intrinsics)
+                grasp.add_and_register_pointcloud(masked_frame, depth_frame, cam_intrinsics)
+
                 grasp.save_pcd(f'pcd/pointcloud_{TARGET_OBJECT}_{utils.RECORD_COUNTER}.pcd')
                 centroid = grasp.find_centroid()
                 grasp_points = grasp.find_grasping_points()

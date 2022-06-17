@@ -20,15 +20,16 @@ class VideoSender:
         self.jpeg_quality = 95
 
         context = zmq.Context()
-        pose_sub = context.socket(zmq.SUB)
-        pose_pub = context.socket(zmq.PUB)
+        self.pose_sub = context.socket(zmq.SUB)
+        self.pose_pub = context.socket(zmq.PUB)
 
-        pose_pub.bind('tcp://localhost:2560')
-        pose_sub.bind('tcp://localhost:2509')
+        self.pose_pub.bind('tcp://10.10.10.228:2560')
+        self.pose_sub.bind('tcp://10.10.10.228:2509')
 
     def send_frames(self, color, depth):
         ret, jpg_frame = cv2.imencode(
             '.jpg', color, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
+        pose = self.pose_sub.recv()
         
         start = time.time()
         ret, frame_depth = cv2.imencode(
@@ -50,6 +51,7 @@ class VideoSender:
         self.sender_color.send_jpg(self.hostname, jpg_frame)
         self.sender_depth.send_jpg(self.hostname + '_depth', frame_depth)
         print('Sent frames')
+        self.pose_pub.send(pose)
 
     # def send_frames(self, color, depth):
     #     ret, jpg_frame = cv2.imencode(
@@ -59,7 +61,7 @@ class VideoSender:
     #     print('Sent frames')
 
 if __name__=='__main__':
-    sender = VideoSender('tcp://10.31.62.2:5555')
+    sender = VideoSender('tcp://10.10.10.122:5555')
     cam = RSCamera()
     while True:
         color, depth = cam.get_raw_color_aligned_frames()

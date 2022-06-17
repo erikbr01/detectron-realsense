@@ -67,9 +67,9 @@ pose_sub = context.socket(zmq.SUB)
 
 
 if SEND_OUTPUT:
-    pose_pub.bind('tcp://localhost:2508')
+    pose_pub.bind('tcp://10.10.10.122:2508')
     pose_sub.connect('tcp://10.10.10.228:2509')
-
+    print('pose sockets connected')
 starting_time = time.time()
 frame_counter = 0
 elapsed_time = 0
@@ -294,6 +294,8 @@ while True:
         output_raw.release()
         output_grasp.release()
         cam.release()
+        pose_pub.close()
+        pose_sub.close()
         receiver.image_hub.close()
         cv2.destroyAllWindows()
         pose_pub.close()

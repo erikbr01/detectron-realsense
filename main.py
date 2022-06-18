@@ -29,7 +29,7 @@ from streamer_receiver import VideoReceiver
 SHOW_WINDOW_VIS = True
 SEND_OUTPUT = True
 SIMPLE_LOC = False
-TARGET_OBJECT = 'bottle'
+TARGET_OBJECT = 'teddy bear'
 
 cam = utils.RSCameraMockup()
 grasp = GraspCandidate()
@@ -63,6 +63,7 @@ class_catalog = metadata.thing_classes
 
 context = zmq.Context()
 socket = context.socket(zmq.REP)
+grasp_color = GraspCandidate()
 
 if SEND_OUTPUT:
     socket.connect('tcp://localhost:2222')
@@ -153,7 +154,7 @@ while True:
             obj_mask = np.zeros_like(frame)
             obj_mask = np.where(mask_array_instance[i] == True, 255, obj_mask)
             # cv2.imwrite(f'pictures/mask_{class_name}.png',obj_mask)
-
+            
             
             if class_name == TARGET_OBJECT:
     
@@ -179,7 +180,7 @@ while True:
 
                     
                     # Transform into drone frame
-                    tvec = transform_frame_EulerXYZ(cam_2_drone_orientation, cam_2_drone_translation, tvec, degrees=True)
+                    # tvec = transform_frame_EulerXYZ(cam_2_drone_orientation, cam_2_drone_translation, tvec, degrees=True)
                     # print(f"Transform to drone frame: {tvec}")
                     # Transform into mocap frame
                     tvec = transform_frame_EulerXYZ(
@@ -195,12 +196,18 @@ while True:
                 # Create point cloud of detected object
                 masked_frame = cv2.bitwise_and(frame, obj_mask)
                 cv2.imwrite('masked_frame.png', masked_frame)
-                grasp_color = GraspCandidate()
-                grasp_color.pointcloud = grasp_color.set_point_cloud_from_aligned_frames(frame, depth_frame, cam_intrinsics)
-                grasp_color.save_pcd('pcd/graphics/color_pcd_full.pcd')
-                pcd = grasp.gen_point_cloud_from_aligned_masked_frames(masked_frame, depth_frame, cam_intrinsics)
-                grasp.add_and_register_pointcloud(masked_frame, depth_frame, cam_intrinsics)
-
+                
+                prev = grasp_color.pointcloud
+                if len(prev.points) == 0:
+                    grasp_color.pointcloud = grasp_color.gen_point_cloud_from_aligned_masked_frames(masked_frame, depth_frame, cam_intrinsics)
+                
+                # grasp_color.save_pcd('pcd/graphics/color_pcd_full.pcd')
+                curr = grasp_color.gen_point_cloud_from_aligned_masked_frames(masked_frame, depth_frame, cam_intrinsics)
+                grasp_color.add_and_register_pointcloud(curr)
+                
+                
+                grasp.pointcloud = grasp.gen_point_cloud_from_aligned_masked_frames(masked_frame, depth_frame, cam_intrinsics)
+                
                 grasp.save_pcd(f'pcd/pointcloud_{TARGET_OBJECT}_{utils.RECORD_COUNTER}.pcd')
                 centroid = grasp.find_centroid()
                 grasp_points = grasp.find_grasping_points()
@@ -246,7 +253,7 @@ while True:
 
                     
                     # Transform into drone frame
-                    tvec = transform_frame_EulerXYZ(cam_2_drone_orientation, cam_2_drone_translation, tvec, degrees=True)
+                    # tvec = transform_frame_EulerXYZ(cam_2_drone_orientation, cam_2_drone_translation, tvec, degrees=True)
                     print(f"Transform to drone frame: {tvec}")
                     # Transform into mocap frame
                     tvec = transform_frame_EulerXYZ(

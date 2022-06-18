@@ -25,10 +25,11 @@ class GraspCandidate:
         
         # Save full PCD for illustration purposes
         
-        pcd = pcd.voxel_down_sample(0.03)
-        self.pointcloud.points = pcd.points
-        self.pointcloud.colors = pcd.colors
+        # pcd = pcd.voxel_down_sample(0.03)
+        # self.pointcloud.points = pcd.points
+        # self.pointcloud.colors = pcd.colors
         self.save_pcd('pcd/graphics/color_full_pcd.pcd')
+        return pcd
 
     def gen_point_cloud_from_aligned_masked_frames(self, frame, depth_frame, cam_intrinsics):
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -85,45 +86,59 @@ class GraspCandidate:
         inlier_cloud.paint_uniform_color([0.8, 0.8, 0.8])
         o3d.visualization.draw_geometries([inlier_cloud, outlier_cloud])
 
-    def add_and_register_pointcloud(self, color_frame, depth_frame, cam_intrinsics):
-        target = self.gen_point_cloud_from_aligned_masked_frames(color_frame, depth_frame, cam_intrinsics)
+    def add_and_register_pointcloud(self, pcd):
+        target = pcd
         source = self.pointcloud
         
         # This is implementation of following paper
         # J. Park, Q.-Y. Zhou, V. Koltun,
         # Colored Point Cloud Registration Revisited, ICCV 2017
 
-        voxel_radius = [0.04, 0.02, 0.01]
+        # voxel_radius = [0.04, 0.02, 0.01]
+        voxel_radius = [0.01, 0.005, 0.001]
         max_iter = [50, 30, 14]
         current_transformation = np.identity(4)
         
-
+        o3d.io.write_point_cloud('pcd/graphics/source_pcd.pcd', source)
+        o3d.io.write_point_cloud('pcd/graphics/target_pcd.pcd', target)
+        o3d.io.write_point_cloud('pcd/graphics/fused_pcd.pcd', self.pointcloud)
         
-        for scale in range(3):
-            iter = max_iter[scale]
-            radius = voxel_radius[scale]
-            print([iter, radius, scale])
+        # for scale in range(3):
+        #     iter = max_iter[scale]
+        #     radius = voxel_radius[scale]
+        #     print([iter, radius, scale])
 
-            print("3-1. Downsample with a voxel size %.2f" % radius)
-            source_down = source.voxel_down_sample(radius)
-            target_down = target.voxel_down_sample(radius)
+        #     print("3-1. Downsample with a voxel size %.2f" % radius)
+        #     source_down = source.voxel_down_sample(radius)
+        #     target_down = target.voxel_down_sample(radius)
 
-            print("3-2. Estimate normal.")
-            source_down.estimate_normals(
-                o3d.geometry.KDTreeSearchParamHybrid(radius=radius * 2, max_nn=30))
-            target_down.estimate_normals(
-                o3d.geometry.KDTreeSearchParamHybrid(radius=radius * 2, max_nn=30))
+        #     print("3-2. Estimate normal.")
+        #     source_down.estimate_normals(
+        #         o3d.geometry.KDTreeSearchParamHybrid(radius=radius * 2, max_nn=30))
+        #     target_down.estimate_normals(
+        #         o3d.geometry.KDTreeSearchParamHybrid(radius=radius * 2, max_nn=30))
 
-            print("3-3. Applying colored point cloud registration")
-            result_icp = o3d.pipelines.registration.registration_colored_icp(
-                source_down, target_down, radius, current_transformation,
-                o3d.pipelines.registration.ICPConvergenceCriteria(relative_fitness=1e-6,
-                                                                relative_rmse=1e-6,
-                                                                max_iteration=iter))
-            current_transformation = result_icp.transformation
+        #     print("3-3. Applying colored point cloud registration")
+        #     # result_icp = o3d.pipelines.registration.registration_colored_icp(
+        #     #     source_down, target_down, radius, current_transformation,
+        #     #     estimation_method=o3d.pipelines.registration.TransformationEstimationForColoredICP,
+        #     #     criteria=o3d.pipelines.registration.ICPConvergenceCriteria(relative_fitness=1e-6,
+        #     #                                                     relative_rmse=1e-6,
+        #     #                                                     max_iteration=iter))
+        #     result_icp = o3d.pipelines.registration.registration_colored_icp(
+        #         source_down, target_down, radius, current_transformation)
+        #     current_transformation = result_icp.transformation
+
+        reg = o3d.pipelines.registration.registration_icp(source, target, 0.5, current_transformation, o3d.pipelines.registration.TransformationEstimationPointToPoint(), o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=2000))
         
-        target.transform(result_icp.transformation)
+        target.transform(reg.transformation)
         self.pointcloud += target
+        o3d.io.write_point_cloud('pcd/graphics/source_pcd.pcd', source)
+        o3d.io.write_point_cloud('pcd/graphics/target_pcd.pcd', target)
+        o3d.io.write_point_cloud('pcd/graphics/fused_pcd.pcd', self.pointcloud)
+        print('registration complete')
+
+
         
 
     def save_pcd(self, file):
@@ -367,9 +382,9 @@ class GraspCandidate:
 
 if __name__=='__main__':
     # grasp = GraspCandidate('pcd/pointcloud_bottle_91.pcd')
-    grasp = GraspCandidate('pcd/pointcloud_bottle_139.pcd')
-    cen = grasp.find_centroid()
-    grasp.add_points_and_color_to_pcd([cen,], (255,0,0))
+    grasp = GraspCandidate('pcd/graphics/fused_pcd.pcd')
+    # cen = grasp.find_centroid()
+    # grasp.add_points_and_color_to_pcd([cen,], (255,0,0))
     # grasp.find_all_grasping_candidates()
     # grasp.find_grasping_points()
     # grasp.save_pcd('pcd/graphics/final_pcd_output.pcd')

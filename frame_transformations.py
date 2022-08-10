@@ -12,7 +12,43 @@ def transform_frame_EulerXYZ(euler_angles, translation, point, degrees=True):
     point is the point in frame A that we want to convert to frame B.
     If degrees is set to true, the angles will be passed in as degrees
     '''
+
+    R = get_rotation_matrix_EulerXYZ(euler_angles, degrees)
+
+    # Total transformation matrix which includes the transformation matrix and the translation in homogenous coordinates
+    T = np.eye(4, 4)
+    T[:3, :3] = R
+    T[:3, 3] = translation
+
     
+    
+    # Apply transformation on target point we want to transform into different coordinate system
+    return np.dot(T, point)
+
+
+
+def get_transformation_matrix_EulerXYZ(euler_angles, translation, degrees=True):
+    '''
+    We translate from frame A to frame B using homogenous coordinates.
+    euler_angles describe the rotation of frame A relative to frame B.
+    translation describes the offset of frame A relative to frame B. 
+    point is the point in frame A that we want to convert to frame B.
+    If degrees is set to true, the angles will be passed in as degrees
+    '''
+
+    R = get_rotation_matrix_EulerXYZ(euler_angles, degrees)
+
+    # Total transformation matrix which includes the transformation matrix and the translation in homogenous coordinates
+    T = np.eye(4, 4)
+    T[:3, :3] = R
+    T[:3, 3] = translation
+
+    
+    
+    # Apply transformation on target point we want to transform into different coordinate system
+    return T
+
+def get_rotation_matrix_EulerXYZ(euler_angles, degrees=True):
     if degrees:
         alpha = euler_angles[0] * pi / 180
         beta = euler_angles[1] * pi / 180
@@ -40,13 +76,50 @@ def transform_frame_EulerXYZ(euler_angles, translation, point, degrees=True):
     # Multiplications such that the total rotation matrix R is R = rz * ry * rx
     R1 = np.matmul(ry, rx)
     R = np.matmul(rz, R1)
+    return R
 
-    # Total transformation matrix which includes the transformation matrix and the translation in homogenous coordinates
-    T = np.eye(4, 4)
-    T[:3, :3] = R
-    T[:3, 3] = translation
+def get_transformation_matrix_about_arb_axis(centroid, angle, axis):
+    t1 = np.array([[1, 0, 0, -centroid[0]],
+                   [0, 1, 0, -centroid[1]],
+                   [0, 0, 1, -centroid[2]],
+                   [0, 0, 0, 1]])
 
+    t1_inv = np.array([[1, 0, 0, centroid[0]],
+                   [0, 1, 0, centroid[1]],
+                   [0, 0, 1, centroid[2]],
+                   [0, 0, 0, 1]])
     
+    axis = np.dot(1/np.linalg.norm(axis), axis)
+    a = axis[0]
+    b = axis[1]
+    c = axis[2]
+    d = np.sqrt(b**2 + c**2)
+
+
+    rx = np.array([[1, 0, 0, 0],
+                   [0, c/d, -b/d, 0],
+                   [0, b/d, c/d, 0],
+                   [0, 0, 0, 1]])
+
+    rx_inv = np.array([[1, 0, 0, 0],
+                   [0, c/d, b/d, 0],
+                   [0, -b/d, c/d, 0],
+                   [0, 0, 0, 1]])
+
+    ry = np.array([[d, 0, -a, 0],
+                   [0, 1, 0, 0],
+                   [a, 0, d, 0],
+                   [0, 0, 0, 1]])
     
-    # Apply transformation on target point we want to transform into different coordinate system
-    return np.dot(T, point)
+    ry_inv = np.array([[d, 0, a, 0],
+                   [0, 1, 0, 0],
+                   [-a, 0, d, 0],
+                   [0, 0, 0, 1]])
+
+    rz = np.array([[cos(angle), sin(angle), 0, 0],
+                   [-sin(angle), cos(angle), 0, 0],
+                   [0, 0, 1, 0],
+                   [0, 0, 0, 1]])
+
+    T = np.dot(t1_inv, np.dot(rx_inv, np.dot(ry_inv, np.dot(rz, np.dot(ry, np.dot(rx, t1))))))
+    return T

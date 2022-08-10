@@ -20,7 +20,7 @@ import pyrealsense2 as rs
 import zmq
 import utils
 from logger import Logger
-from frame_transformations import transform_frame_EulerXYZ
+from frame_transformations import get_transformation_matrix_EulerXYZ, get_transformation_matrix_about_arb_axis, transform_frame_EulerXYZ
 from pointcloud import GraspCandidate
 import detection_msg_pb2
 from streamer_receiver import VideoReceiver
@@ -72,6 +72,7 @@ frame_counter = 0
 elapsed_time = 0
 serial_msg = None
 quad_pose = None
+previous_quad_pose = None
 
 while True:
     try:
@@ -79,6 +80,8 @@ while True:
             quad_pose_serial = socket.recv()
             quad_pose = detection_msg_pb2.Detection()
             quad_pose.ParseFromString(quad_pose_serial)
+            # print(f'received pose after {(time.time() - pose_time)*1000}')
+
             # print(quad_pose)
         serial_msg = None
         frame, depth_frame = receiver.recv_frames()
@@ -194,17 +197,35 @@ while True:
                 
                 # Create point cloud of detected object
                 masked_frame = cv2.bitwise_and(frame, obj_mask)
-                cv2.imwrite('masked_frame.png', masked_frame)
-                grasp_color = GraspCandidate()
-                grasp_color.pointcloud = grasp_color.set_point_cloud_from_aligned_frames(frame, depth_frame, cam_intrinsics)
-                grasp_color.save_pcd('pcd/graphics/color_pcd_full.pcd')
-                pcd = grasp.gen_point_cloud_from_aligned_masked_frames(masked_frame, depth_frame, cam_intrinsics)
-                grasp.add_and_register_pointcloud(masked_frame, depth_frame, cam_intrinsics)
-
-                grasp.save_pcd(f'pcd/pointcloud_{TARGET_OBJECT}_{utils.RECORD_COUNTER}.pcd')
-                centroid = grasp.find_centroid()
-                grasp_points = grasp.find_grasping_points()
-                print('found grasping points')
+                # cv2.imwrite('masked_frame.png', masked_frame)
+                if RECORD_PCD_DATA:
+                    grasp_color = GraspCandidate()
+                    grasp_masked = GraspCandidate()
+                    
+                    grasp_masked.set_point_cloud_from_aligned_masked_frames(masked_frame, depth_frame, cam_intrinsics)
+                    grasp_color.set_point_cloud_from_aligned_frames(frame, depth_frame, cam_intrinsics)
+                    
+                    grasp_masked.save_pcd(f'pcd/pcd_logs/{utils.RECORD_COUNTER}_{TARGET_OBJECT}_masked_{frame_counter}.pcd')
+                    grasp_color.save_pcd(f'pcd/pcd_logs/{utils.RECORD_COUNTER}_{TARGET_OBJECT}_full_{frame_counter}.pcd')
+                    
+                    print(f'Recorded pcd for frame {frame_counter}, sleeping briefly')
+                    time.sleep(3)
+                
+                
+                grasp_points = None
+                try:
+                    grasp.set_point_cloud_from_aligned_masked_frames(masked_frame, depth_frame, cam_intrinsics)
+                    centroid = grasp.find_centroid()
+                    axis_ext, _, _ = grasp.find_largest_axis()
+                    axis = axis_ext[0]
+                    pcd = grasp.rotate_pcd_around_axis(grasp.pointcloud, centroid, math.pi, axis)
+                    grasp.pointcloud += pcd
+                    grasp.save_pcd(f'pcd/pointcloud_{TARGET_OBJECT}_{utils.RECORD_COUNTER}.pcd')
+                    grasp_points = grasp.find_grasping_points()
+                    # print('found grasping points')
+                except Exception as e:
+                    print('pcd data analysis went wrong')
+                    print(e)
                 # # print(f'Grasp points: {grasp_points}')
                 # # print(f'Translation: {tvec}')
                 if grasp_points is not None:
@@ -220,26 +241,19 @@ while True:
 
                     yaw = np.abs(np.arctan(delta_x/delta_y) * 180/np.pi - 90)
                 
+                # print(f'grasp planning time: {(time.time() - grasp_time) * 1000}')
                 # May need to invert y axis
                 if SEND_OUTPUT and not SIMPLE_LOC:
                     tvec = [-centroid[0], centroid[1], -centroid[2], 1]
-                    print('Object Centroid (point cloud localization) -----')
-                    print(tvec)
-                    print(f'Simple localization: {easy_center}')
+                    # print('Object Centroid (point cloud localization) -----')
+                    # print(tvec)
+                    # print(f'Simple localization: {easy_center}')
                     # cam_2_drone_translation = [0.1267, 0, -0.0416]
-                    cam_2_drone_translation = [0.1267, -0.01, -0.025]
+                    cam_2_drone_translation = [0.1267, -0.01, -0.09]
 
-                    cam_2_drone_orientation = [0, -30, 0]
 
-                    translation = [
-                        quad_pose.x, quad_pose.y, quad_pose.z]
-                    rotation = [
-                        quad_pose.roll, -quad_pose.pitch, quad_pose.yaw]
+                    grasp.add_point_cloud_from_aligned_masked_frames()
 
-                    # print('Quad translation: -----')
-                    # print(translation)
-                    # print('Quad rotation: ----')
-                    # print(rotation)
 
                     tvec = [tvec[2], tvec[0], tvec[1], 1]
                     print(f'Mocap axis tvec: {tvec}')
@@ -252,9 +266,12 @@ while True:
                     tvec = transform_frame_EulerXYZ(
                         rotation, translation, tvec, degrees=False)
 
-                    print(f'Transform to mocap frame: {tvec}')
+                    # print(f'Transform to mocap frame: {tvec}')
+
+                    # print(f'transforms done after {(time.time() - transform_time) * 1000}')
                
                     
+                
                 
                 if msg is not None and serial_msg is not None:
                     logger.record_value([np.array(
@@ -283,6 +300,8 @@ while True:
                 break
         
         if SEND_OUTPUT:
+            previous_quad_pose = quad_pose
+
             if serial_msg is not None:
                 socket.send(serial_msg)
             else:

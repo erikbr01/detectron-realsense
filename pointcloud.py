@@ -76,7 +76,48 @@ class GraspCandidate:
         return pcd
 
 
+<<<<<<< Updated upstream
     def display_inlier_outlier(self, cloud, ind):
+=======
+    def add_point_cloud_from_aligned_masked_frames(self, frame, depth_frame, cam_intrinsics, transformation):
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img_depth = o3d.geometry.Image(depth_frame)
+        img_color = o3d.geometry.Image(frame)
+        
+        rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(img_color, img_depth, convert_rgb_to_intensity=False)
+        intrinsics = o3d.camera.PinholeCameraIntrinsic(cam_intrinsics.width, cam_intrinsics.height, cam_intrinsics.fx, cam_intrinsics.fy, cam_intrinsics.ppx, cam_intrinsics.ppy)
+        pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsics)
+        pcd.transform([[-1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        pcd.transform(transformation)
+
+        # ROI selection
+
+        # Get points and colors
+        points = np.asarray(pcd.points)
+        colors = np.asarray(pcd.colors)
+
+        # Filter out points where the color is exactly black - this will filter out all points that were masked before
+        rows, _ = np.where(colors != [0,0,0])
+        res_points = points[rows]
+        res_colors = colors[rows]
+        # Set the points and color of the point cloud to the masked point
+        pcd.points = o3d.utility.Vector3dVector(res_points)
+        pcd.colors = o3d.utility.Vector3dVector(res_colors)
+
+
+        # Downsampling to reduce computation time later on
+        pcd = pcd.voxel_down_sample(0.01)
+
+       
+
+        # Remove radius outliers
+        pcd, _ = pcd.remove_radius_outlier(nb_points=16, radius=0.05)
+
+        self.pointcloud += pcd
+        
+
+    def display_inlier_outlier(cloud, ind):
+>>>>>>> Stashed changes
         inlier_cloud = cloud.select_by_index(ind)
         outlier_cloud = cloud.select_by_index(ind, invert=True)
 

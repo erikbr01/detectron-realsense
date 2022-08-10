@@ -71,6 +71,7 @@ class_catalog = metadata.thing_classes
 
 context = zmq.Context()
 socket = context.socket(zmq.REP)
+grasp_color = GraspCandidate()
 
 if SEND_OUTPUT:
     socket.connect('tcp://localhost:2222')
@@ -204,7 +205,7 @@ while True:
 
                     
                     # Transform into drone frame
-                    tvec = transform_frame_EulerXYZ(cam_2_drone_orientation, cam_2_drone_translation, tvec, degrees=True)
+                    # tvec = transform_frame_EulerXYZ(cam_2_drone_orientation, cam_2_drone_translation, tvec, degrees=True)
                     # print(f"Transform to drone frame: {tvec}")
                     # Transform into mocap frame
                     tvec = transform_frame_EulerXYZ(

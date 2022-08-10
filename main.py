@@ -82,6 +82,9 @@ while True:
             quad_pose.ParseFromString(quad_pose_serial)
             # print(f'received pose after {(time.time() - pose_time)*1000}')
 
+            
+
+
             # print(quad_pose)
         serial_msg = None
         frame, depth_frame = receiver.recv_frames()
@@ -211,15 +214,34 @@ while True:
                     print(f'Recorded pcd for frame {frame_counter}, sleeping briefly')
                     time.sleep(3)
                 
+
+                cam_2_drone_translation = [0.1267, -0.01, -0.09]
+
+                cam_2_drone_orientation = [0, -30, 0]
+
+                translation = [
+                    quad_pose.x, quad_pose.y, quad_pose.z]
+                rotation = [
+                    quad_pose.roll, -quad_pose.pitch, quad_pose.yaw]
+
+                # print('Quad translation: -----')
+                # print(translation)
+                # print('Quad rotation: ----')
+                # print(rotation)
+
+                T_cam_2_drone = get_transformation_matrix_EulerXYZ(cam_2_drone_orientation. cam_2_drone_translation, degrees=True)
+                T_drone_2_global = get_transformation_matrix_EulerXYZ(rotation, translation, degrees=False)
+
+                T_total = np.matmul(T_drone_2_global, T_cam_2_drone)
                 
                 grasp_points = None
                 try:
-                    grasp.set_point_cloud_from_aligned_masked_frames(masked_frame, depth_frame, cam_intrinsics)
+                    grasp.add_point_cloud_from_aligned_masked_frames(masked_frame, depth_frame, cam_intrinsics, T_total)
                     centroid = grasp.find_centroid()
-                    axis_ext, _, _ = grasp.find_largest_axis()
-                    axis = axis_ext[0]
-                    pcd = grasp.rotate_pcd_around_axis(grasp.pointcloud, centroid, math.pi, axis)
-                    grasp.pointcloud += pcd
+                    # axis_ext, _, _ = grasp.find_largest_axis()
+                    # axis = axis_ext[0]
+                    # pcd = grasp.rotate_pcd_around_axis(grasp.pointcloud, centroid, math.pi, axis)
+                    # grasp.pointcloud += pcd
                     grasp.save_pcd(f'pcd/pointcloud_{TARGET_OBJECT}_{utils.RECORD_COUNTER}.pcd')
                     grasp_points = grasp.find_grasping_points()
                     # print('found grasping points')
@@ -241,15 +263,11 @@ while True:
 
                     yaw = np.abs(np.arctan(delta_x/delta_y) * 180/np.pi - 90)
                 
-                # print(f'grasp planning time: {(time.time() - grasp_time) * 1000}')
-                # May need to invert y axis
+             
                 if SEND_OUTPUT and not SIMPLE_LOC:
                     tvec = [-centroid[0], centroid[1], -centroid[2], 1]
-                    # print('Object Centroid (point cloud localization) -----')
-                    # print(tvec)
-                    # print(f'Simple localization: {easy_center}')
-                    # cam_2_drone_translation = [0.1267, 0, -0.0416]
-                    cam_2_drone_translation = [0.1267, -0.01, -0.09]
+                  
+                    
 
 
                     grasp.add_point_cloud_from_aligned_masked_frames()
@@ -268,7 +286,6 @@ while True:
 
                     # print(f'Transform to mocap frame: {tvec}')
 
-                    # print(f'transforms done after {(time.time() - transform_time) * 1000}')
                
                     
                 

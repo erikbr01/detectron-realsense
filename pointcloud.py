@@ -2,6 +2,8 @@ import open3d as o3d
 import numpy as np
 import cv2
 import time
+import math
+from frame_transformations import get_transformation_matrix_about_arb_axis
 
 
 class GraspCandidate:
@@ -9,6 +11,9 @@ class GraspCandidate:
         self.pointcloud = o3d.geometry.PointCloud()
         if file is not None:
             self.pointcloud = o3d.io.read_point_cloud(file)
+            self.pointcloud, idxs = self.pointcloud.remove_radius_outlier(nb_points=16, radius=0.05)
+
+
         self.bbox = None
         self.main_axis = None
         self.grasp_pcd = None
@@ -30,7 +35,7 @@ class GraspCandidate:
         self.pointcloud.colors = pcd.colors
         self.save_pcd('pcd/graphics/color_full_pcd.pcd')
 
-    def gen_point_cloud_from_aligned_masked_frames(self, frame, depth_frame, cam_intrinsics):
+    def set_point_cloud_from_aligned_masked_frames(self, frame, depth_frame, cam_intrinsics):
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         img_depth = o3d.geometry.Image(depth_frame)
         img_color = o3d.geometry.Image(frame)
@@ -43,6 +48,7 @@ class GraspCandidate:
 
         # Save full PCD for illustration purposes
         # self.save_pcd('pcd/graphics/color_full_pcd.pcd')
+        print('saving pcd at creation')
         o3d.io.write_point_cloud('pcd/graphics/color_masked_full_pcd.pcd', pcd)
         # ROI selection
 
@@ -66,17 +72,53 @@ class GraspCandidate:
         pcd = pcd.voxel_down_sample(0.01)
 
         # Update point cloud with calculated points
-        # self.pointcloud.points = pcd.points
-        # self.pointcloud.colors = pcd.colors
+        self.pointcloud.points = pcd.points
+        self.pointcloud.colors = pcd.colors
 
         # Remove radius outliers
-        pcd, idxs = pcd.remove_radius_outlier(nb_points=16, radius=0.05)
+        self.pointcloud, idxs = self.pointcloud.remove_radius_outlier(nb_points=16, radius=0.05)
 
         # self.display_inlier_outlier(self.pointcloud, idxs)
-        return pcd
 
 
-    def display_inlier_outlier(self, cloud, ind):
+    def add_point_cloud_from_aligned_masked_frames(self, frame, depth_frame, cam_intrinsics, transformation):
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img_depth = o3d.geometry.Image(depth_frame)
+        img_color = o3d.geometry.Image(frame)
+        
+        rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(img_color, img_depth, convert_rgb_to_intensity=False)
+        intrinsics = o3d.camera.PinholeCameraIntrinsic(cam_intrinsics.width, cam_intrinsics.height, cam_intrinsics.fx, cam_intrinsics.fy, cam_intrinsics.ppx, cam_intrinsics.ppy)
+        pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsics)
+        pcd.transform([[-1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+        pcd.transform(transformation)
+
+        # ROI selection
+
+        # Get points and colors
+        points = np.asarray(pcd.points)
+        colors = np.asarray(pcd.colors)
+
+        # Filter out points where the color is exactly black - this will filter out all points that were masked before
+        rows, _ = np.where(colors != [0,0,0])
+        res_points = points[rows]
+        res_colors = colors[rows]
+        # Set the points and color of the point cloud to the masked point
+        pcd.points = o3d.utility.Vector3dVector(res_points)
+        pcd.colors = o3d.utility.Vector3dVector(res_colors)
+
+
+        # Downsampling to reduce computation time later on
+        pcd = pcd.voxel_down_sample(0.01)
+
+       
+
+        # Remove radius outliers
+        pcd, _ = pcd.remove_radius_outlier(nb_points=16, radius=0.05)
+
+        self.pointcloud += pcd
+        
+
+    def display_inlier_outlier(cloud, ind):
         inlier_cloud = cloud.select_by_index(ind)
         outlier_cloud = cloud.select_by_index(ind, invert=True)
 
@@ -85,46 +127,7 @@ class GraspCandidate:
         inlier_cloud.paint_uniform_color([0.8, 0.8, 0.8])
         o3d.visualization.draw_geometries([inlier_cloud, outlier_cloud])
 
-    def add_and_register_pointcloud(self, color_frame, depth_frame, cam_intrinsics):
-        target = self.gen_point_cloud_from_aligned_masked_frames(color_frame, depth_frame, cam_intrinsics)
-        source = self.pointcloud
-        
-        # This is implementation of following paper
-        # J. Park, Q.-Y. Zhou, V. Koltun,
-        # Colored Point Cloud Registration Revisited, ICCV 2017
 
-        voxel_radius = [0.04, 0.02, 0.01]
-        max_iter = [50, 30, 14]
-        current_transformation = np.identity(4)
-        
-
-        
-        for scale in range(3):
-            iter = max_iter[scale]
-            radius = voxel_radius[scale]
-            print([iter, radius, scale])
-
-            print("3-1. Downsample with a voxel size %.2f" % radius)
-            source_down = source.voxel_down_sample(radius)
-            target_down = target.voxel_down_sample(radius)
-
-            print("3-2. Estimate normal.")
-            source_down.estimate_normals(
-                o3d.geometry.KDTreeSearchParamHybrid(radius=radius * 2, max_nn=30))
-            target_down.estimate_normals(
-                o3d.geometry.KDTreeSearchParamHybrid(radius=radius * 2, max_nn=30))
-
-            print("3-3. Applying colored point cloud registration")
-            result_icp = o3d.pipelines.registration.registration_colored_icp(
-                source_down, target_down, radius, current_transformation,
-                o3d.pipelines.registration.ICPConvergenceCriteria(relative_fitness=1e-6,
-                                                                relative_rmse=1e-6,
-                                                                max_iteration=iter))
-            current_transformation = result_icp.transformation
-        
-        target.transform(result_icp.transformation)
-        self.pointcloud += target
-        
 
     def save_pcd(self, file):
         o3d.io.write_point_cloud(file, self.pointcloud)
@@ -196,12 +199,11 @@ class GraspCandidate:
         
         # Get index of maximum in array to determine longest axis and create a unit vector in the direction of the longest axis
         max_idx = np.argmax(extents)
-        unit_vec = np.zeros(3)
-        unit_vec[max_idx] = 1
+        main_unit_vec = np.zeros(3)
+        main_unit_vec[max_idx] = 1
 
 
-        # These are the other unit vectors perpendicular to the one above
-        # We will use these to create our grasping plane
+        # These are the indices for the other unit vectors perpendicular to the one above
         idx_1 = (max_idx + 1) % 3
         idx_2 = (max_idx + 2) % 3
         
@@ -211,17 +213,16 @@ class GraspCandidate:
         unit_vec_plane_2[idx_2] = 1
 
         
-        # Now, apply the transformation to transform the vector to the bounding box rotation
-        # This gives the vector that defines the direction of the axis of the object
-        main_axis = np.dot(bbox.R, unit_vec)
+        # Now, apply the transformation to rotate the base frame vectors to the bounding box frame
+        main_axis = np.dot(bbox.R, main_unit_vec)
         axis_plane_1 = np.dot(bbox.R, unit_vec_plane_1)
         axis_plane_2 = np.dot(bbox.R, unit_vec_plane_2)
 
         # Use for visualisation          
-        # axis_points = [np.add(center, np.dot(main_axis, 0.1*k)) for k in range(8)]
+        axis_points = [np.add(center, np.dot(main_axis, 0.1*k)) for k in range(8)]
         # axis_points_1 = [np.add(center, np.dot(axis_plane_1, 0.1*k)) for k in range(8)]
         # axis_points_2 = [np.add(center, np.dot(axis_plane_2, 0.1*k)) for k in range(8)]
-        # self.add_points_and_color_to_pcd(axis_points, (0,255,0))
+        self.add_points_and_color_to_pcd(axis_points, (0,255,0))
         # self.add_points_and_color_to_pcd(axis_points_1, (0,255,0))
         # self.add_points_and_color_to_pcd(axis_points_2, (0,255,0))
 
@@ -230,6 +231,11 @@ class GraspCandidate:
         return [[main_axis, extents[max_idx]], [axis_plane_1, extents[idx_1]], [axis_plane_2, extents[idx_2]]]
 
 
+    def rotate_pcd_around_axis(self, pcd, centroid, angle, axis):
+        T = get_transformation_matrix_about_arb_axis(centroid, angle, axis)
+        pcd_copy = o3d.geometry.PointCloud(pcd)
+        return pcd_copy.transform(T)
+        
     def find_all_grasping_candidates(self):
         axis_and_extents = self.find_largest_axis()
         main = axis_and_extents[0]
@@ -367,14 +373,20 @@ class GraspCandidate:
 
 if __name__=='__main__':
     # grasp = GraspCandidate('pcd/pointcloud_bottle_91.pcd')
-    grasp = GraspCandidate('pcd/pointcloud_bottle_139.pcd')
+    grasp = GraspCandidate('pcd/pointcloud_teddy bear_315.pcd')
+    axis_extent, _, _ = grasp.find_largest_axis()
+    axis = axis_extent[0]
     cen = grasp.find_centroid()
-    grasp.add_points_and_color_to_pcd([cen,], (255,0,0))
+
+    # pcd = grasp.rotate_pcd_around_axis(grasp.pointcloud, cen, math.pi, axis)
+    # cen = grasp.find_centroid()
+    # grasp.add_points_and_color_to_pcd([cen,], (255,0,0))
     # grasp.find_all_grasping_candidates()
     # grasp.find_grasping_points()
     # grasp.save_pcd('pcd/graphics/final_pcd_output.pcd')
     # grasp.visualize_geometries([grasp.pointcloud, grasp.grasp_pcd])
-    # grasp.visualize_geometries([grasp.grasp_pcd,])
-    grasp.visualise_pcd()
+    # pcd.transform([[1, 0, 0, 1], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+    grasp.visualize_geometries([grasp.pointcloud])
+    # grasp.visualise_pcd()
 
         

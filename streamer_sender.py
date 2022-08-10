@@ -5,6 +5,8 @@ import numpy as np
 from realsense import RSCamera
 import imagezmq
 from utils import truncate
+from threading import Thread
+import multiprocessing
 
 class VideoSender:
     def __init__(self, addr) -> None:
@@ -17,43 +19,58 @@ class VideoSender:
             connect_to=addr)
         self.hostname = socket.gethostname()
         self.jpeg_quality = 95
+        manager = multiprocessing.Manager()
+        self.ret_dict = manager.dict()
 
-    def send_frames(self, color, depth):
+    def encode_color(self, color, ret_dict):
         ret, jpg_frame = cv2.imencode(
             '.jpg', color, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
-        
-        start = time.time()
+        ret_dict['color'] = jpg_frame 
+
+    def encode_depth(self, depth, ret_dict):
         ret, frame_depth = cv2.imencode(
             '.png', depth, [int(cv2.IMWRITE_PNG_COMPRESSION), 2])
-        print(f'PNG time (ms): {(time.time() - start) * 1000}')
-        
+        ret_dict['depth'] = frame_depth
+
+    def send_frames(self, color, depth):
         start = time.time()
-        ret, jpg_frame_depth = cv2.imencode(
-            '.jpg', color, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
-        print(f'JPG time (ms): {(time.time() - start) * 1000}')
-        print(f'Original length: {depth.nbytes}')
-        print(f'PNG compression ratio: {truncate(len(frame_depth)/depth.nbytes, 3)}')
-        print(f'JPG compression ratio: {truncate(len(jpg_frame_depth)/depth.nbytes, 3)}')
+        t1 = Thread(target=self.encode_color, args=(color, self.ret_dict))
+        t2 = Thread(target=self.encode_depth, args=(depth, self.ret_dict))
+        t1.start()
+        t2.start()
 
-        print(f'PNG: {len(frame_depth)}')
-        print(f'JPG: {len(jpg_frame_depth)}')
-        print(f'Ratio: {truncate(len(jpg_frame_depth)/len(frame_depth), 3)}')
+        t1.join()
+        t2.join()
+        jpg_color = self.ret_dict['color']
+        jpg_depth = self.ret_dict['depth']
+        threaded_time = time.time() - start
+        # print(f'threaded finished after {(threaded_time) * 1000}')
 
-        self.sender_color.send_jpg(self.hostname, jpg_frame)
-        self.sender_depth.send_jpg(self.hostname + '_depth', frame_depth)
-        print('Sent frames')
+        # start = time.time()
+        # ret, frame_depth = cv2.imencode(
+        #     '.png', depth, [int(cv2.IMWRITE_PNG_COMPRESSION), 2])
+        # # jpg_depth = frame_depth if ret else None
+   
 
-    # def send_frames(self, color, depth):
-    #     ret, jpg_frame = cv2.imencode(
-    #         '.jpg', color, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
-    #     self.sender_color.send_jpg(self.hostname, jpg_frame)
-    #     self.sender_depth.send_image(self.hostname + '_depth', depth)
-    #     print('Sent frames')
+        # ret, jpg_frame = cv2.imencode(
+        #     '.jpg', color, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
+        # # jpg_color = jpg_frame if ret else None
+        # non_threaded_time = time.time() - start
+        # print(f'non-threaded finished after {(non_threaded_time) * 1000}')
+
+        # print(f'Ratio: {truncate(threaded_time/non_threaded_time, 3)}')
+        start = time.time()
+        self.sender_color.send_jpg(self.hostname, jpg_color)
+        self.sender_depth.send_jpg(start, jpg_depth)
+    
 
 if __name__=='__main__':
-    sender = VideoSender('tcp://10.31.62.2:5555')
+    sender = VideoSender('tcp://10.31.62.7:5555')
     cam = RSCamera()
     while True:
+        start = time.time()
         color, depth = cam.get_raw_color_aligned_frames()
         sender.send_frames(color, depth)
-        print('sent frames')
+        end = time.time() - start
+        print(f'total loop took: (ms) {end}')
+        # print('sent frames')

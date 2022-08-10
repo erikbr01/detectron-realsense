@@ -4,6 +4,7 @@ from pointcloud import GraspCandidate
 setup_logger()
 
 import numpy as np
+import math
 import cv2
 import time
 
@@ -20,7 +21,7 @@ import pyrealsense2 as rs
 import zmq
 import utils
 from logger import Logger
-from frame_transformations import transform_frame_EulerXYZ
+from frame_transformations import get_transformation_matrix_EulerXYZ, get_transformation_matrix_about_arb_axis, transform_frame_EulerXYZ
 from pointcloud import GraspCandidate
 import detection_msg_pb2
 from streamer_receiver import VideoReceiver
@@ -29,7 +30,12 @@ from streamer_receiver import VideoReceiver
 SHOW_WINDOW_VIS = True
 SEND_OUTPUT = True
 SIMPLE_LOC = False
-TARGET_OBJECT = 'bottle'
+SEND_RAW = False
+SEND_MEAN = False
+SEND_ROLLING_AVG = True
+RECORD_PCD_DATA = False
+
+TARGET_OBJECT = 'book'
 
 cam = utils.RSCameraMockup()
 grasp = GraspCandidate()
@@ -49,6 +55,8 @@ output_grasp = cv2.VideoWriter(utils.VIDEO_GRASP_FILE, cv2.VideoWriter_fourcc(
 
 logger = Logger()
 records = np.empty((0, logger.cols))
+time_logger = Logger()
+times = []
 
 
 
@@ -69,21 +77,31 @@ if SEND_OUTPUT:
 
 starting_time = time.time()
 frame_counter = 0
+success_frame_counter = 0
 elapsed_time = 0
 serial_msg = None
 quad_pose = None
+previous_quad_pose = None
 
 while True:
+    starting_time = time.time()
     try:
+        receive_time = time.time()
         if SEND_OUTPUT:
+            pose_time = time.time()
             quad_pose_serial = socket.recv()
             quad_pose = detection_msg_pb2.Detection()
             quad_pose.ParseFromString(quad_pose_serial)
+            # print(f'received pose after {(time.time() - pose_time)*1000}')
+
+            
+
+
             # print(quad_pose)
         serial_msg = None
         frame, depth_frame = receiver.recv_frames()
         # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame = torch.from_numpy(frame)
+        # frame = torch.from_numpy(frame)
         cam_intrinsics = cam.intrinsics
         
         # depth_colormap = cam.colorize_frame(depth_frame)
@@ -93,21 +111,26 @@ while True:
 
         # output_depth.write(depth_colormap)
         # output_depth.write(depth_frame)
-        # output_raw.write(frame)
+        output_raw.write(frame)
 
-        frame, depth_frame = receiver.recv_frames()
-     
+        # frame, depth_frame = receiver.recv_frames()
+        # print(f'received everything after {(time.time() - receive_time)*1000}')
+        pred_time = time.time()
         outputs = predictor(frame)
+        # print(f'detectron2 took {(time.time() - pred_time)*1000}')
         detected_class_idxs = outputs['instances'].pred_classes
         pred_boxes = outputs['instances'].pred_boxes
         
-        out = v.draw_instance_predictions(frame, outputs['instances'].to('cpu'))
+        if SHOW_WINDOW_VIS:
+            out = v.draw_instance_predictions(frame, outputs['instances'].to('cpu'))
+
 
         # v = Visualizer(frame[:, :, ::-1], metadata=metadata, scale=1.2)
         # out = v.draw_instance_predictions(outputs['instances'].to('cpu'))
         
         # vis_frame = np.asarray(out.get_image()[:, :, ::-1])
-        vis_frame = np.asarray(out.get_image())
+        if SHOW_WINDOW_VIS:
+            vis_frame = np.asarray(out.get_image())
 
         mask_array = outputs['instances'].pred_masks.to('cpu').numpy()
         num_instances = mask_array.shape[0]
@@ -117,7 +140,7 @@ while True:
         
         # Loop over instances that have been detected
         for i in range(num_instances):
-
+            setup_time = time.time()
             class_idx = detected_class_idxs[i]
             bbox = pred_boxes[i].to('cpu')
             class_name = class_catalog[class_idx]
@@ -154,14 +177,16 @@ while True:
             obj_mask = np.where(mask_array_instance[i] == True, 255, obj_mask)
             # cv2.imwrite(f'pictures/mask_{class_name}.png',obj_mask)
 
-            
+            # print(f'setup time for object: {(time.time() - setup_time)*1000}')
             if class_name == TARGET_OBJECT:
-    
+                
                 if SEND_OUTPUT and SIMPLE_LOC:
                     print('Object location (simple localization) -----')
-                    print(tvec)
+                    print(tvec)        
                     # cam_2_drone_translation = [0.1267, 0, -0.0416]
                     cam_2_drone_translation = [0.1267, -0.01, 0.0]
+                    # compensate yaw in y
+                    tvec[1] += utils.y_compensator(tvec[0])
 
                     cam_2_drone_orientation = [0, -30, 0]
 
@@ -184,7 +209,7 @@ while True:
                     # Transform into mocap frame
                     tvec = transform_frame_EulerXYZ(
                         rotation, translation, tvec, degrees=False)
-                    print(f'Transform to mocap frame: {tvec}')
+                    # print(f'Transform to mocap frame: {tvec}')
                     # print(tvec)
                     
                     
@@ -193,18 +218,56 @@ while True:
 
                 
                 # Create point cloud of detected object
+                grasp_time = time.time()
                 masked_frame = cv2.bitwise_and(frame, obj_mask)
-                cv2.imwrite('masked_frame.png', masked_frame)
-                grasp_color = GraspCandidate()
-                grasp_color.pointcloud = grasp_color.set_point_cloud_from_aligned_frames(frame, depth_frame, cam_intrinsics)
-                grasp_color.save_pcd('pcd/graphics/color_pcd_full.pcd')
-                pcd = grasp.gen_point_cloud_from_aligned_masked_frames(masked_frame, depth_frame, cam_intrinsics)
-                grasp.add_and_register_pointcloud(masked_frame, depth_frame, cam_intrinsics)
+                # cv2.imwrite('masked_frame.png', masked_frame)
+                if RECORD_PCD_DATA:
+                    grasp_color = GraspCandidate()
+                    grasp_masked = GraspCandidate()
+                    
+                    grasp_masked.set_point_cloud_from_aligned_masked_frames(masked_frame, depth_frame, cam_intrinsics)
+                    grasp_color.set_point_cloud_from_aligned_frames(frame, depth_frame, cam_intrinsics)
+                    
+                    grasp_masked.save_pcd(f'pcd/pcd_logs/{utils.RECORD_COUNTER}_{TARGET_OBJECT}_masked_{frame_counter}.pcd')
+                    grasp_color.save_pcd(f'pcd/pcd_logs/{utils.RECORD_COUNTER}_{TARGET_OBJECT}_full_{frame_counter}.pcd')
+                    
+                    print(f'Recorded pcd for frame {frame_counter}, sleeping briefly')
+                    time.sleep(3)
+                
 
-                grasp.save_pcd(f'pcd/pointcloud_{TARGET_OBJECT}_{utils.RECORD_COUNTER}.pcd')
-                centroid = grasp.find_centroid()
-                grasp_points = grasp.find_grasping_points()
-                print('found grasping points')
+                cam_2_drone_translation = [0.1267, -0.01, -0.09]
+
+                cam_2_drone_orientation = [0, -30, 0]
+
+                translation = [
+                    quad_pose.x, quad_pose.y, quad_pose.z]
+                rotation = [
+                    quad_pose.roll, -quad_pose.pitch, quad_pose.yaw]
+
+                # print('Quad translation: -----')
+                # print(translation)
+                # print('Quad rotation: ----')
+                # print(rotation)
+
+                T_cam_2_drone = get_transformation_matrix_EulerXYZ(cam_2_drone_orientation. cam_2_drone_translation, degrees=True)
+                T_drone_2_global = get_transformation_matrix_EulerXYZ(rotation, translation, degrees=False)
+
+                T_total = np.matmul(T_drone_2_global, T_cam_2_drone)
+                
+                grasp_points = None
+                try:
+                    grasp.add_point_cloud_from_aligned_masked_frames(masked_frame, depth_frame, cam_intrinsics, T_total)
+                    centroid = grasp.find_centroid()
+                    # axis_ext, _, _ = grasp.find_largest_axis()
+                    # axis = axis_ext[0]
+                    # pcd = grasp.rotate_pcd_around_axis(grasp.pointcloud, centroid, math.pi, axis)
+                    # grasp.pointcloud += pcd
+                    grasp.save_pcd(f'pcd/pointcloud_{TARGET_OBJECT}_{utils.RECORD_COUNTER}.pcd')
+                    grasp_points = grasp.find_grasping_points()
+                    # print('found grasping points')
+                except Exception as e:
+                    print('pcd data analysis went wrong')
+                    print(e)
                 # # print(f'Grasp points: {grasp_points}')
                 # # print(f'Translation: {tvec}')
                 if grasp_points is not None:
@@ -220,71 +283,91 @@ while True:
 
                     yaw = np.abs(np.arctan(delta_x/delta_y) * 180/np.pi - 90)
                 
-                # May need to invert y axis
+             
                 if SEND_OUTPUT and not SIMPLE_LOC:
                     tvec = [-centroid[0], centroid[1], -centroid[2], 1]
-                    print('Object Centroid (point cloud localization) -----')
-                    print(tvec)
-                    print(f'Simple localization: {easy_center}')
-                    # cam_2_drone_translation = [0.1267, 0, -0.0416]
-                    cam_2_drone_translation = [0.1267, -0.01, -0.025]
+                  
+                    
 
-                    cam_2_drone_orientation = [0, -30, 0]
 
-                    translation = [
-                        quad_pose.x, quad_pose.y, quad_pose.z]
-                    rotation = [
-                        quad_pose.roll, -quad_pose.pitch, quad_pose.yaw]
+                    grasp.add_point_cloud_from_aligned_masked_frames()
 
-                    # print('Quad translation: -----')
-                    # print(translation)
-                    # print('Quad rotation: ----')
-                    # print(rotation)
 
                     tvec = [tvec[2], tvec[0], tvec[1], 1]
-                    print(f'Mocap axis tvec: {tvec}')
+                    # print(f'Mocap axis tvec: {tvec}')
 
                     
                     # Transform into drone frame
                     tvec = transform_frame_EulerXYZ(cam_2_drone_orientation, cam_2_drone_translation, tvec, degrees=True)
-                    print(f"Transform to drone frame: {tvec}")
+                    # print(f"Transform to drone frame: {tvec}")
+                    # tvec[1] += utils.y_compensator(tvec[0])
                     # Transform into mocap frame
                     tvec = transform_frame_EulerXYZ(
                         rotation, translation, tvec, degrees=False)
 
-                    print(f'Transform to mocap frame: {tvec}')
+                    # print(f'Transform to mocap frame: {tvec}')
+
                
                     
                 
-                if msg is not None and serial_msg is not None:
-                    logger.record_value([np.array(
-                            [tvec[0], tvec[1], tvec[2], elapsed_time, 0, class_name]), ])
-                    print(f'logged {tvec}')
-                # x_mean = np.mean(logger.records[:, 0].astype(float))
-                # y_mean = np.mean(logger.records[:, 1].astype(float))
-                # z_mean = np.mean(logger.records[:, 2].astype(float))
-                # msg.x = x_mean
-                # msg.y = y_mean
-                # msg.z = z_mean
-                msg.x = tvec[0]
-                msg.y = tvec[1]
-                msg.z = tvec[2]
+                
+                logger.record_value([np.array(
+                        [tvec[0], tvec[1], tvec[2], elapsed_time, 0, class_name, quad_pose.x, quad_pose.y, quad_pose.z, quad_pose.roll, quad_pose.pitch, quad_pose.yaw]), ])
+                print(f'logged {tvec}')
+                success_frame_counter += 1
+
+
+                length = len(logger.records[:,0].astype(float))
+                if SEND_MEAN and length > 9:
+                    x_mean = np.mean(logger.records[:, 0].astype(float))
+                    y_mean = np.mean(logger.records[:, 1].astype(float))
+                    z_mean = np.mean(logger.records[:, 2].astype(float))
+                    msg.x = x_mean
+                    msg.y = y_mean
+                    msg.z = z_mean
+                    
+
+                if SEND_ROLLING_AVG and length > 9:
+                    num_records = 10 if length > 9 else length
+                    x_avg = np.average(logger.records[-num_records:, 0].astype(float))
+                    y_avg = np.average(logger.records[-num_records:, 1].astype(float))
+                    z_avg = np.average(logger.records[-num_records:, 2].astype(float))
+                    msg.x = x_avg
+                    msg.y = y_avg
+                    msg.z = z_avg
+
+                if SEND_RAW or length < 10:
+                    msg.x = tvec[0]
+                    msg.y = tvec[1]
+                    msg.z = tvec[2]
+                    pass
+
+
+
+
+
+
                 msg.yaw = yaw
                 msg.label = class_name
                 msg.confidence = 0
                 serial_msg = msg.SerializeToString()
-
-                # Log values
-                elapsed_time = time.time() - starting_time
                 
+                
+        elapsed_time = time.time() - starting_time
+
         if SHOW_WINDOW_VIS:
             cv2.imshow('output', vis_frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
         
         if SEND_OUTPUT:
+            previous_quad_pose = quad_pose
+
             if serial_msg is not None:
+                socket_time = time.time()
                 socket.send(serial_msg)
+                print(f'sent msg took {(time.time() - socket_time)*1000}')
+
             else:
                 msg = detection_msg_pb2.Detection()
                 msg.x = 0.0
@@ -295,18 +378,39 @@ while True:
                 serial_msg = msg.SerializeToString()
                 socket.send(serial_msg)
         
-        output.write(vis_frame)
+
+        print(f'ELAPSED TIME (ms): {elapsed_time * 1000}')
+   
+        times.append(elapsed_time)
+        if SHOW_WINDOW_VIS:
+            output.write(vis_frame)
         frame_counter += 1
 
 
     except KeyboardInterrupt as e:
+        print('exception handler called')
+        msg = detection_msg_pb2.Detection()
+        msg.x = 0.0
+        msg.y = 0.0
+        msg.z = 0.0
+        msg.label = 'closing'
+        msg.confidence = 0.0
+        serial_msg = msg.SerializeToString()
+        socket.send(serial_msg)
+
+        time_logger.records = np.asarray(times)
+        time_logger.export_single_col_csv(f'logs/main_times_{utils.RECORD_COUNTER}.csv')
+        
+        receiver.close()
         output.release()
         output_depth.release()
         output_raw.release()
         output_grasp.release()
         cam.release()
+        socket.close()
         receiver.image_hub.close()
         cv2.destroyAllWindows()
-        socket.close()
+        print(f'saving file to {utils.LOG_FILE}')
         logger.export_to_csv(utils.LOG_FILE)
+        break
 
